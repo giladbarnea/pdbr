@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 import inspect
 import io
 import re
+from copy import deepcopy
 from pathlib import Path
 from pdb import Pdb, getsourcelines
-from typing import Type
+from timeit import timeit
 
 import sqlparse
 from rich import box, markup
@@ -39,7 +38,7 @@ class AsciiStdout(io.TextIOWrapper):
     pass
 
 
-def rich_pdb_klass(base: Type[Pdb], is_celery=False, context=None, show_layouts=True):
+def rich_pdb_klass(base, is_celery=False, context=None, show_layouts=True):
     class RichPdb(base):
         _style = None
         _theme = None
@@ -144,7 +143,7 @@ def rich_pdb_klass(base: Type[Pdb], is_celery=False, context=None, show_layouts=
                 highlight_lines=highlight_lines,
             )
 
-        def _get_variables(self) -> list[tuple[str, str, str]]:
+        def _get_variables(self):
             try:
                 return [
                     (k, str(v), str(type(v)))
@@ -153,7 +152,33 @@ def rich_pdb_klass(base: Type[Pdb], is_celery=False, context=None, show_layouts=
                 ]
             except AttributeError:
                 return []
-
+        
+        @staticmethod
+        def _lax_deepcopy(obj):
+            """
+            deepcopy raises a TypeError if the object, e.g a module, cannot be pickled.
+            This happens when trying to deepcopy locals() or globals() (in do_timeit).
+            This function deepcopies whatever it can, which is enough to
+            duplicate the current namespace by value (and not by reference).
+            """
+            copied = {}
+            if hasattr(obj, 'items'):
+                obj_items = obj.items()
+            elif hasattr(obj, '__iter__'):
+                obj_items = enumerate(obj)
+            elif hasattr(obj, '__slots__'):
+                obj_items = obj.__slots__.items()
+            elif hasattr(obj, '__dict__'):
+                obj_items = obj.__dict__.items()
+            else:
+                return obj
+            for k, v in obj_items:
+                try:
+                    copied[k] = deepcopy(v)
+                except TypeError:
+                    copied[k] = RichPdb._lax_deepcopy(v)
+            return copied
+        
         def do_l(self, arg):
             """l
             List 11 lines source code for the current file.
@@ -328,6 +353,46 @@ def rich_pdb_klass(base: Type[Pdb], is_celery=False, context=None, show_layouts=
                 self._getval(arg), reindent=True, keyword_case="upper"
             )
             self._print(val)
+
+        def do_timeit(self, arg: str):
+            """timeit [-n number] expression
+            Time execution of a Python expression with `timeit` module.
+            Doesn't change the state of the program.
+            -n defaults to 100,000.
+            """
+            def _get_nice_amount_and_unit(_seconds) -> tuple:
+                if _seconds >= 1:
+                    _amount, _unit = _seconds, 'sec'
+                elif _seconds >= 1 / 1_000:
+                    _amount, _unit = _seconds * 1_000, 'ms'
+                elif _seconds >= 1 / 1_000_000:
+                    _amount, _unit = _seconds * 1_000_000, 'μs'
+                else:
+                    _amount, _unit = _seconds * 1_000_000_000, 'ns'
+                return _amount, _unit
+            
+            if '-n' in arg:
+                before, _, after = arg.partition('-n')
+                match = re.match(r' *[\d_]+', after)
+                if not match:
+                    self.error(f'Invalid `number` value, expecting a number after `-n `')
+                    return self.default(arg)
+                number = int(match.group())
+                arg = before + after[match.span()[1]:]
+            else:
+                number = 100_000
+            cmd, arg, line = self.parseline(arg)
+            namespace = self._lax_deepcopy(self.curframe.f_globals)
+            namespace.update(self._lax_deepcopy(self.curframe_locals))
+            self.message(f'Timing "{line}" {number:,} times...')
+            total_seconds = timeit(line, number=number, globals=namespace)
+            total_time, total_time_unit = _get_nice_amount_and_unit(total_seconds)
+            per_call_seconds = total_seconds / number
+            per_call_time, per_call_time_unit = _get_nice_amount_and_unit(per_call_seconds)
+    
+            self.message(f"Total:    {total_time:,.3f} {total_time_unit} over {number:,} times\n"
+                         f"Per call: {per_call_time:,.3f} {per_call_time_unit}\n"
+                         f"Per sec:  {(1 / per_call_seconds):,.3f} calls")
 
         def displayhook(self, obj):
             if obj is not None:
