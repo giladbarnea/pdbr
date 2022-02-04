@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import inspect
 import io
 import re
 from pathlib import Path
 from pdb import Pdb, getsourcelines
+from typing import Type
 
 import sqlparse
 from rich import box, markup
@@ -36,7 +39,7 @@ class AsciiStdout(io.TextIOWrapper):
     pass
 
 
-def rich_pdb_klass(base, is_celery=False, context=None, show_layouts=True):
+def rich_pdb_klass(base: Type[Pdb], is_celery=False, context=None, show_layouts=True):
     class RichPdb(base):
         _style = None
         _theme = None
@@ -141,7 +144,7 @@ def rich_pdb_klass(base, is_celery=False, context=None, show_layouts=True):
                 highlight_lines=highlight_lines,
             )
 
-        def _get_variables(self):
+        def _get_variables(self) -> list[tuple[str, str, str]]:
             try:
                 return [
                     (k, str(v), str(type(v)))
