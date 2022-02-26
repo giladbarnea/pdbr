@@ -1,5 +1,8 @@
+from contextlib import redirect_stdout
+from io import StringIO
 import inspect
 import io
+import os
 import re
 from pathlib import Path
 from pdb import Pdb, getsourcelines
@@ -17,11 +20,15 @@ from rich.theme import Theme
 from rich.tree import Tree
 
 from pdbr._console_layout import ConsoleLayout
+from typing import NoReturn
+import sys
 
 try:
     from IPython.terminal.interactiveshell import TerminalInteractiveShell
+    from IPython.terminal.prompts import RichPromptDisplayHook
 
     TerminalInteractiveShell.simple_prompt = False
+    RichPromptDisplayHook.write_output_prompt = lambda self: sys.stdout.write(self.shell.separate_out)
 except ImportError:
     pass
 
@@ -381,6 +388,7 @@ def rich_pdb_klass(base, is_celery=False, context=None, show_layouts=True):
                 return super().onecmd(line)
 
             except Exception as e:
+                # TODO: self.shell.showtraceback(running_compiled_code=True)
                 self.error(f"{type(e).__qualname__} in onecmd({line!r}): {e}")
                 return False
 
@@ -430,7 +438,7 @@ def rich_pdb_klass(base, is_celery=False, context=None, show_layouts=True):
             self.shell.hooks.synchronize_with_editor(filename, lineno, 0)
             # vds: <<
 
-        def run_magic(self, line) -> str:
+        def run_magic(self, line) -> NoReturn:
             """
             Parses the line and runs the appropriate magic function.
             Assumes that the line is without a leading '%'.
@@ -443,21 +451,31 @@ def rich_pdb_klass(base, is_celery=False, context=None, show_layouts=True):
                 result = getattr(self, f"do_{magic_name}")(arg)
                 # TODO: test for zombie lastcmd in this case
             else:
-                magic_fn = self.shell.find_line_magic(magic_name)
-                if not magic_fn:
-                    self.error(f"Line Magic %{magic_name} not found")
-                    # TODO: test for zombie lastcmd in this case
-                    return ""
-                if magic_name in ("time", "timeit"):
-                    result = magic_fn(
-                        arg,
-                        local_ns={**self.curframe_locals, **self.curframe.f_globals},
-                    )
+                if os.getenv('PDBR_THRU_IPYTHON', '0') == '1':
+                    from IPython.core.interactiveshell import ExecutionResult, ExecutionInfo
+                    from IPython.terminal.interactiveshell import TerminalInteractiveShell
+                    self.shell: TerminalInteractiveShell
+                    fd = StringIO()
+                    with redirect_stdout(fd) as captured:
+                        res: ExecutionResult = self.shell.run_cell(line)
+                    result = captured.getvalue().strip()
                 else:
-                    result = magic_fn(arg)
+                    magic_fn = self.shell.find_line_magic(magic_name)
+                    if not magic_fn:
+                        self.error(f"Line Magic %{magic_name} not found")
+                        # TODO: test for zombie lastcmd in this case
+                        return
+                    if magic_name in ("time", "timeit"):
+                        result = magic_fn(
+                            arg,
+                            local_ns={**self.curframe_locals, **self.curframe.f_globals},
+                        )
+                    else:
+                        result = magic_fn(arg)
             if result:
+                
                 result = str(result)
                 self._print(result)
-            return ""
+            
 
     return RichPdb

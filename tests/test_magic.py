@@ -9,7 +9,6 @@ import pytest
 from pexpect import spawn
 from rich.console import Console
 from rich.theme import Theme
-
 from pdbr._pdbr import rich_pdb_klass
 
 NUMBER_RE = "[\d.e+_,-]+"  # Matches 1e+03, 1.0e-03, 1_000, 1,000
@@ -297,3 +296,57 @@ def test_filesystem_magics(capsys, RichIPdb):
     rpdb.onecmd("import os; os.getcwd()")
     pwd_output = unquote(capsys.readouterr().out.strip())
     assert pwd_output == new_dir
+
+def test_env(monkeypatch, capsys, RichIPdb):
+    rpdb = RichIPdb(stdout=sys.stdout)
+    with monkeypatch.context() as m:
+        m.setenv("PDBR_TEST_ENV_VAR", "FOO")
+        rpdb.onecmd("%env")
+        env_output = capsys.readouterr().out.strip().replace("\n", "")
+        assert "'PDBR_TEST_ENV_VAR': 'FOO'" in env_output
+
+        rpdb.onecmd("%env PDBR_TEST_ENV_VAR")
+        env_output = capsys.readouterr().out.strip().replace("\n", "")
+        assert env_output == "FOO"
+    
+    rpdb.onecmd("%env")
+    env_output = capsys.readouterr().out.strip().replace("\n", "")
+    assert "'PDBR_TEST_ENV_VAR': 'FOO'" not in env_output
+    
+    rpdb.onecmd("%env PDBR_TEST_ENV_VAR")
+    env_output = capsys.readouterr().out.strip().replace("\n", "")
+    assert env_output.endswith("Environment does not have key: PDBR_TEST_ENV_VAR")
+    
+    rpdb.onecmd("%env PDBR_TEST_ENV_VAR=BAR")
+    env_output = capsys.readouterr().out.strip()
+    assert env_output == "env: PDBR_TEST_ENV_VAR=BAR"
+
+    rpdb.onecmd("%env PDBR_TEST_ENV_VAR")
+    env_output = capsys.readouterr().out.strip()
+    assert env_output == "BAR"
+
+    rpdb.onecmd("%env PDBR_TEST_ENV_VAR BAZ")
+    env_output = capsys.readouterr().out.strip()
+    assert env_output == "env: PDBR_TEST_ENV_VAR=BAZ"
+
+    rpdb.onecmd("%env PDBR_TEST_ENV_VAR")
+    env_output = capsys.readouterr().out.strip()
+    assert env_output == "BAZ"
+    
+    # sh = rpdb.shell
+    # sh.run_cell("myvar=42")
+    # sh.run_cell("%env PDBR_TEST_ENV_VAR=$myvar")
+    rpdb.onecmd("myvar=42")
+    rpdb.onecmd("myvar")
+    output = capsys.readouterr().out.strip()
+    assert output == "42"
+    
+    rpdb.onecmd("%env PDBR_TEST_ENV_VAR=$myvar")
+    env_output = capsys.readouterr().out.strip()
+    assert env_output == "env: PDBR_TEST_ENV_VAR=42"
+
+    rpdb.onecmd("%env PDBR_TEST_ENV_VAR")
+    env_output = capsys.readouterr().out.strip()
+    assert env_output == "42"
+    
+    
